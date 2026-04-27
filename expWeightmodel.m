@@ -1,5 +1,5 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% EXPONENTIALLY-WEIGHTED VARIABLE-CONTEXT MODEL (NON-MC / NON-AR)
+% EXPONENTIALLY-WEIGHTED VARIABLE-CONTEXT MODEL (NON-MC / NON-AR) (BASELINE! DO NOT MODIFY)
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 function [] = expWeightmodel(name)
 arguments
@@ -44,9 +44,6 @@ end
     % --- VARIABLE-LENGTH FORECAST LOOP ---
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     for t = k+1:T
-        if (mod(t,1000) == 0)
-           disp(t)
-        end
         query = context;
         % Start with a weak baseline heavily informed by global training frequencies
         % This fundamentally replaces naive ones(1,9) smoothing

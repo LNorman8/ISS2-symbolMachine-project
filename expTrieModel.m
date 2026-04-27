@@ -1,7 +1,7 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % VARIABLE-CONTEXT MODEL WITH TRIE LOOKUP AND EXPONENTIAL DEPTH WEIGHTING
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-function [] = smoothExpWeightmodel(name)
+function [] = expTrieModel(name)
 arguments
     name (1,:) char = 'Hawaiian'
 end
@@ -11,9 +11,13 @@ end
     sequence = seq_struct.sequence; % Extract the sequence from the loaded data
     trainSeq = sequence(:)'; % Ensure row vector
     N = length(trainSeq);
-    k = 8; % Max context depth, matching the baseline expWeightmodel
     % ============================================================
-    % 1. Precompute global prior (marginal distribution)
+    % 1. Adaptive k: choose context depth based on training size.
+    %    Target ~N/9^k >= 10 training samples per length-k context.
+    % ============================================================
+    k = max(1, min(8, floor(log(N / 10) / log(9))));
+    % ============================================================
+    % 2. Precompute global prior (marginal distribution)
     % ============================================================
     priorCounts = zeros(1, 9);
     for sym = 1:9
@@ -21,7 +25,7 @@ end
     end
     priorProb = priorCounts / sum(priorCounts);
     % ============================================================
-    % 2. Build suffix trie over training sequence
+    % 3. Build suffix trie over training sequence
     % ============================================================
     % The trie is keyed by reversed context (most-recent symbol first).
     %   trieChildren(node, sym) = child node index (uint32; 0 = no child)
@@ -55,19 +59,22 @@ end
     % --- TEST SET SETUP (Symbol Machine) ---
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     T = initializeSymbolMachineS26(testFile, 0);
-    % Bootstrap the initial context from the end of the training sequence so
-    % that the first test predictions already have a full k-symbol context.
+    % Bootstrap the initial context with the end of the training data so that
+    % the first test predictions already have a meaningful k-symbol context.
     context = trainSeq(end-k+1:end);
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     % --- VARIABLE-LENGTH FORECAST LOOP ---
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    % Exponential depth weighting: each depth d contributes 3^d times its raw
-    % trie counts to a shared accumulator.  Deeper (more specific) contexts
-    % therefore dominate the final distribution, mirroring the weight = 3^L
-    % scheme in the baseline expWeightmodel but using an O(k) trie traversal
-    % instead of an O(N*k) training-set scan.
+    % Exponential depth weighting: each depth d contributes base^d raw counts
+    % to an accumulator, so deeper (more specific) contexts dominate the
+    % final distribution while shallower contexts still provide a smoothing
+    % floor.  The unigram prior (scaled by 0.5) acts as the depth-0 baseline.
+    % This mirrors the original expWeightmodel's weight = 3^L scheme but
+    % uses the O(k) trie lookup instead of an O(N*k) training-set scan.
+    base = 3; % exponential weight base (depth d gets base^d times the raw counts)
     for t = 1:T
-        % Unigram baseline (same scaling as expWeightmodel's priorProb * 0.5)
+        % Start with a small unigram baseline (same role as priorProb * 0.5
+        % in the original expWeightmodel).
         accumCounts = priorProb * 0.5;
         node = uint32(1); % root
         for d = 1:k
@@ -77,8 +84,10 @@ end
                 break; % context unseen at this depth; stop early
             end
             node = childNode;
-            % Exponentially higher reward for deeper context matches
-            accumCounts = accumCounts + (3^d) * trieCounts(node, :);
+            depthCounts = trieCounts(node, :);
+            % Add exponentially weighted raw counts: deeper depth = much
+            % higher weight, so a well-attested deep context dominates.
+            accumCounts = accumCounts + (base^d) * depthCounts;
         end
         % ============================================================
         % Normalise to a valid probability vector
