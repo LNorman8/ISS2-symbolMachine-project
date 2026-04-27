@@ -64,6 +64,8 @@ end
     % without any prior context).
     context = zeros(1, k);
     for i = 1:k
+        % symbolMachineS26 accumulates penalty internally into SYMBOLDATA;
+        % the local return value is not needed here.
         [symbol, ~] = symbolMachineS26(priorProb);
         context(i) = symbol;
     end
@@ -103,7 +105,7 @@ end
         probVec = max(probVec(:)', 1e-12);
         probVec = probVec / sum(probVec);
         % ============================================================
-        % Symbol Machine step
+        % Symbol Machine step (penalty is accumulated internally in SYMBOLDATA)
         % ============================================================
         [symbol, ~] = symbolMachineS26(probVec);
         % ============================================================
