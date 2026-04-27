@@ -60,24 +60,17 @@ end
     % --- TEST SET SETUP (Symbol Machine) ---
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     T = initializeSymbolMachineS26(testFile, 0);
-    % Bootstrap the initial context with the unigram prior.
-    % The first k symbols incur penalty at the unigram rate (unavoidable
-    % without any prior context).
-    context = zeros(1, k);
-    for i = 1:k
-        % symbolMachineS26 accumulates penalty internally into SYMBOLDATA;
-        % the local return value is not needed here.
-        [symbol, ~] = symbolMachineS26(priorProb);
-        context(i) = symbol;
-    end
+    % Bootstrap the initial context with the training data
+    % Better then forcefully incuring the penalty of bad initial guesses
+    context = trainSeq(end-k+1:end);
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     % --- VARIABLE-LENGTH FORECAST LOOP ---
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     % Jelinek-Mercer interpolation weight lambda.
     % At each depth d: P_d = lambda * P_ML_d + (1-lambda) * P_{d-1}
-    % Starting from P_0 = priorProb (unigram).
     lambda = 0.5; % starting value
-    for t = k + 1:T
+    gamma = 5;
+    for t = 1:T
         % Walk the trie from root using the current context (most-recent
         % symbol first).  At each depth, blend the local ML estimate with
         % the accumulated shallower estimate via Jelinek-Mercer smoothing.
@@ -94,7 +87,8 @@ end
             total = sum(depthCounts);
             if total > 0
                 P_ML = depthCounts / total;
-                probVec = lambda * P_ML + (1 - lambda) * probVec;
+                lambda_d = total / (total + gamma);   % gamma ~ 5
+                probVec = lambda_d * P_ML + (1 - lambda_d) * probVec;
             end
         end
         % ============================================================
