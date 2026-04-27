@@ -1,11 +1,10 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% VARIABLE-CONTEXT MODEL WITH TRIE LOOKUP AND JELINEK-MERCER SMOOTHING
+% VARIABLE-CONTEXT MODEL WITH TRIE LOOKUP AND EXPONENTIAL DEPTH WEIGHTING
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 function [] = smoothExpWeightmodel(name)
 arguments
     name (1,:) char = 'Hawaiian'
 end
-    alpha = 0.05 %learning rate for addapting to penalty
     trainFile = ['sequence_' name '_train.mat'];
     testFile  = ['sequence_' name '_test.mat'];
     seq_struct = load(trainFile);
@@ -60,22 +59,24 @@ end
     % --- TEST SET SETUP (Symbol Machine) ---
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     T = initializeSymbolMachineS26(testFile, 0);
-    % Bootstrap the initial context with the training data
-    % Better then forcefully incuring the penalty of bad initial guesses
+    % Bootstrap the initial context with the end of the training data so that
+    % the first test predictions already have a meaningful k-symbol context.
     context = trainSeq(end-k+1:end);
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     % --- VARIABLE-LENGTH FORECAST LOOP ---
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    % Jelinek-Mercer interpolation weight lambda.
-    % At each depth d: P_d = lambda * P_ML_d + (1-lambda) * P_{d-1}
-    lambda = 0.5; % starting value
-    gamma = 5;
+    % Exponential depth weighting: each depth d contributes base^d raw counts
+    % to an accumulator, so deeper (more specific) contexts dominate the
+    % final distribution while shallower contexts still provide a smoothing
+    % floor.  The unigram prior (scaled by 0.5) acts as the depth-0 baseline.
+    % This mirrors the original expWeightmodel's weight = 3^L scheme but
+    % uses the O(k) trie lookup instead of an O(N*k) training-set scan.
+    base = 3; % exponential weight base (depth d gets base^d times the raw counts)
     for t = 1:T
-        % Walk the trie from root using the current context (most-recent
-        % symbol first).  At each depth, blend the local ML estimate with
-        % the accumulated shallower estimate via Jelinek-Mercer smoothing.
-        probVec = priorProb; % depth-0 base: unigram
-        node = uint32(1);   % root
+        % Start with a small unigram baseline (same role as priorProb * 0.5
+        % in the original expWeightmodel).
+        accumCounts = priorProb * 0.5;
+        node = uint32(1); % root
         for d = 1:k
             sym = context(end - d + 1); % d-th most recent symbol
             childNode = trieChildren(node, sym);
@@ -84,30 +85,22 @@ end
             end
             node = childNode;
             depthCounts = trieCounts(node, :);
-            total = sum(depthCounts);
-            if total > 0
-                P_ML = depthCounts / total;
-                lambda_d = total / (total + gamma);   % gamma ~ 5
-                probVec = lambda_d * P_ML + (1 - lambda_d) * probVec;
-            end
+            % Add exponentially weighted raw counts: deeper depth = much
+            % higher weight, so a well-attested deep context dominates.
+            accumCounts = accumCounts + (base^d) * depthCounts;
         end
         % ============================================================
-        % Ensure valid probability vector (row, non-negative, sums to 1)
+        % Normalise to a valid probability vector
         % ============================================================
-        probVec = max(probVec(:)', 1e-12);
-        probVec = probVec / sum(probVec);
+        probVec = accumCounts / sum(accumCounts);
         % ============================================================
         % Symbol Machine step (penalty is accumulated internally in SYMBOLDATA)
         % ============================================================
-        [symbol, penalty] = symbolMachineS26(probVec);
+        [symbol, ~] = symbolMachineS26(probVec);
         % ============================================================
         % Update context (sliding window)
         % ============================================================
         context = [context(2:end), symbol];
-        %=============================================================
-        % Update lambda
-        %=============================================================
-        lambda = lambda * (1 - alpha) + alpha * exp(-penalty);
     end
     reportSymbolMachineS26;
 end
