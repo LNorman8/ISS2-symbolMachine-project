@@ -72,17 +72,21 @@ end
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     % --- VARIABLE-LENGTH FORECAST LOOP ---
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    % Jelinek-Mercer interpolation weight lambda.
-    % At each depth d: P_d = lambda * P_ML_d + (1-lambda) * P_{d-1}
+    % Witten-Bell count-based interpolation weight.
+    % At each depth d: lambda_d = n_d / (n_d + gamma)
+    % P_d = lambda_d * P_ML_d + (1 - lambda_d) * P_{d-1}
     % Starting from P_0 = priorProb (unigram).
-    lambda = 0.5;
+    % When a context has many training observations (large n_d), lambda_d -> 1
+    % and the ML estimate dominates.  When a context is rare (small n_d),
+    % lambda_d -> 0 and the model falls back to the shallower distribution.
+    gamma = 5; % Witten-Bell discount constant
     for t = k + 1:T
         if mod(t, 1000) == 0
             disp(t);
         end
         % Walk the trie from root using the current context (most-recent
         % symbol first).  At each depth, blend the local ML estimate with
-        % the accumulated shallower estimate via Jelinek-Mercer smoothing.
+        % the accumulated shallower estimate using a count-adaptive weight.
         probVec = priorProb; % depth-0 base: unigram
         node = uint32(1);   % root
         for d = 1:k
@@ -96,7 +100,8 @@ end
             total = sum(depthCounts);
             if total > 0
                 P_ML = depthCounts / total;
-                probVec = lambda * P_ML + (1 - lambda) * probVec;
+                lambda_d = total / (total + gamma);
+                probVec = lambda_d * P_ML + (1 - lambda_d) * probVec;
             end
         end
         % ============================================================
