@@ -1,7 +1,7 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% VARIABLE-CONTEXT MODEL WITH TRIE LOOKUP AND JELINEK-MERCER SMOOTHING
+% VARIABLE-CONTEXT MODEL WITH TRIE LOOKUP AND EXPONENTIAL DEPTH WEIGHTING
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-function [] = expWeightmodel(name)
+function [] = expTrieModel(name)
 arguments
     name (1,:) char = 'Hawaiian'
 end
@@ -59,36 +59,24 @@ end
     % --- TEST SET SETUP (Symbol Machine) ---
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     T = initializeSymbolMachineS26(testFile, 0);
-    % Bootstrap the initial context with the unigram prior.
-    % The first k symbols incur penalty at the unigram rate (unavoidable
-    % without any prior context).
-    context = zeros(1, k);
-    for i = 1:k
-        % symbolMachineS26 accumulates penalty internally into SYMBOLDATA;
-        % the local return value is not needed here.
-        [symbol, ~] = symbolMachineS26(priorProb);
-        context(i) = symbol;
-    end
+    % Bootstrap the initial context with the end of the training data so that
+    % the first test predictions already have a meaningful k-symbol context.
+    context = trainSeq(end-k+1:end);
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     % --- VARIABLE-LENGTH FORECAST LOOP ---
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    % Witten-Bell count-based interpolation weight.
-    % At each depth d: lambda_d = n_d / (n_d + gamma)
-    % P_d = lambda_d * P_ML_d + (1 - lambda_d) * P_{d-1}
-    % Starting from P_0 = priorProb (unigram).
-    % When a context has many training observations (large n_d), lambda_d -> 1
-    % and the ML estimate dominates.  When a context is rare (small n_d),
-    % lambda_d -> 0 and the model falls back to the shallower distribution.
-    gamma = 5; % Witten-Bell discount constant
-    for t = k + 1:T
-        if mod(t, 1000) == 0
-            disp(t);
-        end
-        % Walk the trie from root using the current context (most-recent
-        % symbol first).  At each depth, blend the local ML estimate with
-        % the accumulated shallower estimate using a count-adaptive weight.
-        probVec = priorProb; % depth-0 base: unigram
-        node = uint32(1);   % root
+    % Exponential depth weighting: each depth d contributes base^d raw counts
+    % to an accumulator, so deeper (more specific) contexts dominate the
+    % final distribution while shallower contexts still provide a smoothing
+    % floor.  The unigram prior (scaled by 0.5) acts as the depth-0 baseline.
+    % This mirrors the original expWeightmodel's weight = 3^L scheme but
+    % uses the O(k) trie lookup instead of an O(N*k) training-set scan.
+    base = 3; % exponential weight base (depth d gets base^d times the raw counts)
+    for t = 1:T
+        % Start with a small unigram baseline (same role as priorProb * 0.5
+        % in the original expWeightmodel).
+        accumCounts = priorProb * 0.5;
+        node = uint32(1); % root
         for d = 1:k
             sym = context(end - d + 1); % d-th most recent symbol
             childNode = trieChildren(node, sym);
@@ -97,18 +85,14 @@ end
             end
             node = childNode;
             depthCounts = trieCounts(node, :);
-            total = sum(depthCounts);
-            if total > 0
-                P_ML = depthCounts / total;
-                lambda_d = total / (total + gamma);
-                probVec = lambda_d * P_ML + (1 - lambda_d) * probVec;
-            end
+            % Add exponentially weighted raw counts: deeper depth = much
+            % higher weight, so a well-attested deep context dominates.
+            accumCounts = accumCounts + (base^d) * depthCounts;
         end
         % ============================================================
-        % Ensure valid probability vector (row, non-negative, sums to 1)
+        % Normalise to a valid probability vector
         % ============================================================
-        probVec = max(probVec(:)', 1e-12);
-        probVec = probVec / sum(probVec);
+        probVec = accumCounts / sum(accumCounts);
         % ============================================================
         % Symbol Machine step (penalty is accumulated internally in SYMBOLDATA)
         % ============================================================
