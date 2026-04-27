@@ -1,7 +1,7 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% VARIABLE-CONTEXT MODEL WITH TRIE LOOKUP AND JELINEK-MERCER SMOOTHING
+% VARIABLE-CONTEXT MODEL WITH TRIE LOOKUP AND EXPONENTIAL DEPTH WEIGHTING
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-function [] = expWeightmodel(name)
+function [] = smoothExpWeightmodel(name)
 arguments
     name (1,:) char = 'Hawaiian'
 end
@@ -11,13 +11,9 @@ end
     sequence = seq_struct.sequence; % Extract the sequence from the loaded data
     trainSeq = sequence(:)'; % Ensure row vector
     N = length(trainSeq);
+    k = 8; % Max context depth, matching the baseline expWeightmodel
     % ============================================================
-    % 1. Adaptive k: choose context depth based on training size.
-    %    Target ~N/9^k >= 10 training samples per length-k context.
-    % ============================================================
-    k = max(1, min(8, floor(log(N / 10) / log(9))));
-    % ============================================================
-    % 2. Precompute global prior (marginal distribution)
+    % 1. Precompute global prior (marginal distribution)
     % ============================================================
     priorCounts = zeros(1, 9);
     for sym = 1:9
@@ -25,7 +21,7 @@ end
     end
     priorProb = priorCounts / sum(priorCounts);
     % ============================================================
-    % 3. Build suffix trie over training sequence
+    % 2. Build suffix trie over training sequence
     % ============================================================
     % The trie is keyed by reversed context (most-recent symbol first).
     %   trieChildren(node, sym) = child node index (uint32; 0 = no child)
@@ -59,36 +55,21 @@ end
     % --- TEST SET SETUP (Symbol Machine) ---
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     T = initializeSymbolMachineS26(testFile, 0);
-    % Bootstrap the initial context with the unigram prior.
-    % The first k symbols incur penalty at the unigram rate (unavoidable
-    % without any prior context).
-    context = zeros(1, k);
-    for i = 1:k
-        % symbolMachineS26 accumulates penalty internally into SYMBOLDATA;
-        % the local return value is not needed here.
-        [symbol, ~] = symbolMachineS26(priorProb);
-        context(i) = symbol;
-    end
+    % Bootstrap the initial context from the end of the training sequence so
+    % that the first test predictions already have a full k-symbol context.
+    context = trainSeq(end-k+1:end);
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     % --- VARIABLE-LENGTH FORECAST LOOP ---
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    % Witten-Bell count-based interpolation weight.
-    % At each depth d: lambda_d = n_d / (n_d + gamma)
-    % P_d = lambda_d * P_ML_d + (1 - lambda_d) * P_{d-1}
-    % Starting from P_0 = priorProb (unigram).
-    % When a context has many training observations (large n_d), lambda_d -> 1
-    % and the ML estimate dominates.  When a context is rare (small n_d),
-    % lambda_d -> 0 and the model falls back to the shallower distribution.
-    gamma = 5; % Witten-Bell discount constant
-    for t = k + 1:T
-        if mod(t, 1000) == 0
-            disp(t);
-        end
-        % Walk the trie from root using the current context (most-recent
-        % symbol first).  At each depth, blend the local ML estimate with
-        % the accumulated shallower estimate using a count-adaptive weight.
-        probVec = priorProb; % depth-0 base: unigram
-        node = uint32(1);   % root
+    % Exponential depth weighting: each depth d contributes 3^d times its raw
+    % trie counts to a shared accumulator.  Deeper (more specific) contexts
+    % therefore dominate the final distribution, mirroring the weight = 3^L
+    % scheme in the baseline expWeightmodel but using an O(k) trie traversal
+    % instead of an O(N*k) training-set scan.
+    for t = 1:T
+        % Unigram baseline (same scaling as expWeightmodel's priorProb * 0.5)
+        accumCounts = priorProb * 0.5;
+        node = uint32(1); % root
         for d = 1:k
             sym = context(end - d + 1); % d-th most recent symbol
             childNode = trieChildren(node, sym);
@@ -96,19 +77,13 @@ end
                 break; % context unseen at this depth; stop early
             end
             node = childNode;
-            depthCounts = trieCounts(node, :);
-            total = sum(depthCounts);
-            if total > 0
-                P_ML = depthCounts / total;
-                lambda_d = total / (total + gamma);
-                probVec = lambda_d * P_ML + (1 - lambda_d) * probVec;
-            end
+            % Exponentially higher reward for deeper context matches
+            accumCounts = accumCounts + (3^d) * trieCounts(node, :);
         end
         % ============================================================
-        % Ensure valid probability vector (row, non-negative, sums to 1)
+        % Normalise to a valid probability vector
         % ============================================================
-        probVec = max(probVec(:)', 1e-12);
-        probVec = probVec / sum(probVec);
+        probVec = accumCounts / sum(accumCounts);
         % ============================================================
         % Symbol Machine step (penalty is accumulated internally in SYMBOLDATA)
         % ============================================================
