@@ -1,10 +1,40 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % VARIABLE-CONTEXT MODEL WITH TRIE LOOKUP AND EXPONENTIAL DEPTH WEIGHTING
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-function [] = expmodelTrie(name)
-arguments
-    name (1,:) char = 'Hawaiian'
+function bitsPerSymbol = expmodelTrie(name, varargin)
+if nargin < 1 || isempty(name)
+    name = 'Hawaiian';
 end
+opts.k = [];
+opts.weightBase = [];
+opts.priorScale = [];
+opts.gamma = [];
+opts.autoTune = true;
+if mod(numel(varargin),2) ~= 0
+    error('expmodelTrie requires name/value parameter pairs.');
+end
+for vi = 1:2:numel(varargin)
+    nameArg = varargin{vi};
+    valArg = varargin{vi+1};
+    if ~ischar(nameArg) && ~isStringScalar(nameArg)
+        error('Parameter names must be character vectors or string scalars.');
+    end
+    switch lower(char(nameArg))
+        case 'k'
+            opts.k = valArg;
+        case 'weightbase'
+            opts.weightBase = valArg;
+        case 'priorscale'
+            opts.priorScale = valArg;
+        case 'gamma'
+            opts.gamma = valArg;
+        case 'autotune'
+            opts.autoTune = valArg;
+        otherwise
+            error('Unknown parameter name: %s', nameArg);
+    end
+end
+
 trainFile = ['sequence_' name '_train.mat'];
 testFile  = ['sequence_' name '_test.mat'];
 seq_struct = load(trainFile);
@@ -21,10 +51,29 @@ weightBaseCands = [1.8, 2.2, 2.6, 3.0];
 priorScaleCands = [0.2, 0.5, 1.0];
 gammaCands = [4.0, 8.0, 16.0];
 
-% Select context depth and smoothing parameters with an inner validation
-% pass on training data.
-[k, weightBase, priorScale, gamma] = chooseAdaptiveParams(trainSeq, ...
-    maxK, weightBaseCands, priorScaleCands, gammaCands);
+if opts.autoTune
+    % Select context depth and smoothing parameters with an inner validation
+    % pass on training data.
+    [k, weightBase, priorScale, gamma] = chooseAdaptiveParams(trainSeq, ...
+        maxK, weightBaseCands, priorScaleCands, gammaCands);
+else
+    k = opts.k;
+    if isempty(k)
+        k = 8;
+    end
+    weightBase = opts.weightBase;
+    if isempty(weightBase)
+        weightBase = 3.0;
+    end
+    priorScale = opts.priorScale;
+    if isempty(priorScale)
+        priorScale = 0.5;
+    end
+    gamma = opts.gamma;
+    if isempty(gamma)
+        gamma = 8.0;
+    end
+end
 % ============================================================
 % 1. Precompute global prior (marginal distribution)
 % ============================================================
@@ -89,6 +138,8 @@ for t = 1:T
     context = [context(2:end), symbol];
 end
 reportSymbolMachineS26;
+global SYMBOLDATA
+bitsPerSymbol = SYMBOLDATA.totalPenaltyInBits / T;
 end
 
 function [kBest, weightBaseBest, priorScaleBest, gammaBest] = ...
