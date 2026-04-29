@@ -5,6 +5,7 @@ function [] = expmodelTrie(name)
 arguments
     name (1,:) char = 'Hawaiian'
 end
+AUTOTUNE = false; % Set to false to disable adaptive parameter tuning and use defaults.
 trainFile = ['sequence_' name '_train.mat'];
 testFile  = ['sequence_' name '_test.mat'];
 seq_struct = load(trainFile);
@@ -15,16 +16,22 @@ N = length(trainSeq);
 % online updates while forecasting.
 T = initializeSymbolMachineS26(testFile, 0);
 
-% Candidate grids for depth weighting and smoothing.
-maxK = min(8, max(1, N - 1));
-weightBaseCands = [1.8, 2.2, 2.6, 3.0];
-priorScaleCands = [0.2, 0.5, 1.0];
-gammaCands = [4.0, 8.0, 16.0];
-
 % Select context depth and smoothing parameters with an inner validation
 % pass on training data.
-[k, weightBase, priorScale, gamma] = chooseAdaptiveParams(trainSeq, ...
-    maxK, weightBaseCands, priorScaleCands, gammaCands);
+if AUTOTUNE
+    % Candidate grids for depth weighting and smoothing.
+    maxK = min(8, max(1, N - 1));
+    weightBaseCands = [1.8, 2.2, 2.6, 3.0];
+    priorScaleCands = [0.2, 0.5, 1.0];
+    gammaCands = [4.0, 8.0, 16.0];
+    [k, weightBase, priorScale, gamma] = chooseAdaptiveParams(trainSeq, ...
+        maxK, weightBaseCands, priorScaleCands, gammaCands);
+else
+    k = 6; % Tuned defaults (based on all of the datasets)
+    weightBase = 2.0;
+    priorScale = 0.1;
+    gamma = 2.0;
+end
 % ============================================================
 % 1. Precompute global prior (marginal distribution)
 % ============================================================
