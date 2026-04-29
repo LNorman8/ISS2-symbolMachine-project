@@ -2,6 +2,12 @@
 % VARIABLE-CONTEXT MODEL WITH TRIE LOOKUP AND EXPONENTIAL DEPTH WEIGHTING
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 function bitsPerSymbol = expmodelTrie(name, varargin)
+arguments
+    name (1,:) char
+end
+arguments (Repeating)
+    varargin (1,:) char
+end
 if nargin < 1 || isempty(name)
     name = 'Hawaiian';
 end
@@ -10,6 +16,7 @@ opts.weightBase = [];
 opts.priorScale = [];
 opts.gamma = [];
 opts.autoTune = true;
+opts.usePerClassTuning = true;  % Use entropy-based per-class params if available
 if mod(numel(varargin),2) ~= 0
     error('expmodelTrie requires name/value parameter pairs.');
 end
@@ -30,6 +37,8 @@ for vi = 1:2:numel(varargin)
             opts.gamma = valArg;
         case 'autotune'
             opts.autoTune = valArg;
+        case 'useperclasstuning'
+            opts.usePerClassTuning = valArg;
         otherwise
             error('Unknown parameter name: %s', nameArg);
     end
@@ -51,7 +60,47 @@ weightBaseCands = [1.8, 2.2, 2.6, 3.0];
 priorScaleCands = [0.2, 0.5, 1.0];
 gammaCands = [4.0, 8.0, 16.0];
 
-if opts.autoTune
+% Try to load per-class parameters if per-class tuning is enabled
+perClassParamsAvailable = false;
+classIdx = [];
+if opts.usePerClassTuning && isempty(opts.k)  % Only use per-class if not manually overriding
+    if isfile('perClassParams.mat')
+        try
+            data = load('perClassParams.mat');
+            if isfield(data, 'bestParamsPerClass') && isfield(data, 'classThresholds') && ...
+                    isfield(data, 'datasets') && isfield(data, 'classMembers')
+                % Compute entropy for this dataset
+                entropy = computeEntropy(trainSeq);
+
+                % Classify into entropy regime
+                classThresholds = data.classThresholds;
+                for c = 1:4
+                    if entropy >= classThresholds(c) && entropy < classThresholds(c+1)
+                        classIdx = c;
+                        break;
+                    end
+                end
+
+                if ~isempty(classIdx) && ~isempty(data.bestParamsPerClass{classIdx})
+                    perClassParamsAvailable = true;
+                    params = data.bestParamsPerClass{classIdx};
+                    fprintf('Using per-class tuning: %s (entropy=%.4f)\n', ...
+                        data.classNames{classIdx}, entropy);
+                end
+            end
+        catch
+            % If loading fails, fall back to autoTune
+        end
+    end
+end
+
+if perClassParamsAvailable
+    % Use per-class parameters
+    k = params.k;
+    weightBase = params.weightBase;
+    priorScale = params.priorScale;
+    gamma = params.gamma;
+elseif opts.autoTune
     % Select context depth and smoothing parameters with an inner validation
     % pass on training data.
     [k, weightBase, priorScale, gamma] = chooseAdaptiveParams(trainSeq, ...
@@ -273,4 +322,14 @@ for d = 1:k
     node = trieChildren(node, sym);
     trieCounts(node, nextSym) = trieCounts(node, nextSym) + 1;
 end
+end
+
+function entropy = computeEntropy(sequence)
+% Compute Shannon entropy of a symbol sequence
+% Input: sequence (row vector of integers 1-9)
+% Output: entropy in bits
+counts = histcounts(sequence, 0.5:1:9.5);
+probs = counts / sum(counts);
+probs(probs == 0) = [];
+entropy = -sum(probs .* log2(probs));
 end
