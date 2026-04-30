@@ -9,10 +9,16 @@
 %
 % Returns: average bits per symbol on validation fold (cross-validation score)
 
-function bitsCV = expmodelTrieTrainCV(name, k, weightBase, priorScale, gamma, foldFrac)
+function bitsCV = expmodelTrieTrainCV(name, k, weightBase, priorScale, gamma, foldFrac, mixAlpha, shallowK)
 
 if nargin < 6
     foldFrac = 0.2;  % Use 20% for validation, 80% for training
+end
+if nargin < 7 || isempty(mixAlpha)
+    mixAlpha = defaultMixAlpha(k);
+end
+if nargin < 8 || isempty(shallowK)
+    shallowK = defaultShallowK(k);
 end
 
 trainFile = ['sequence_' name '_train.mat'];
@@ -43,7 +49,6 @@ trieChildren = zeros(maxNodes, 9, 'uint32');
 trieCounts = zeros(maxNodes, 9);
 nodeCount = uint32(1);
 
-context = zeros(1, k);
 for i = 1:length(trainSeq)
     sym = trainSeq(i);
 
@@ -69,12 +74,6 @@ for i = 1:length(trainSeq)
         end
     end
 
-    % Update context
-    if i >= k
-        context = trainSeq(i-k+1:i);
-    else
-        context = [zeros(1, k-i), trainSeq(1:i)];
-    end
 end
 
 % ============================================================
@@ -82,63 +81,75 @@ end
 % ============================================================
 totalBits = 0;
 valLen = length(valSeq);
-context = zeros(1, k);
+fullSeq = [trainSeq valSeq];
 
 for i = 1:valLen
     sym = valSeq(i);
 
     % Forecast using trie
-    accumProb = priorProb * priorScale;
-    node = uint32(1);
-
-    for d = 1:k
-        if d <= i + nTrain  % Account for position in full sequence
-            if d <= i
-                ctxSym = valSeq(i - d + 1);
-            else
-                ctxSym = trainSeq(end - (d - i) + 1);
-            end
-        else
-            ctxSym = 0;
-        end
-
-        if ctxSym > 0 && ctxSym <= 9
-            childNode = trieChildren(node, ctxSym);
-            if childNode == 0
-                break;
-            end
-            node = childNode;
-            depthCounts = trieCounts(node, :);
-            depthTotal = sum(depthCounts);
-
-            if depthTotal > 0
-                lambda = depthTotal / (depthTotal + gamma);
-                depthProb = lambda * (depthCounts / depthTotal) + (1 - lambda) * priorProb;
-            else
-                depthProb = priorProb;
-            end
-
-            accumProb = accumProb + (weightBase^d) * depthProb;
-        else
-            break;
-        end
+    histEnd = nTrain + i - 1;
+    histStart = max(1, histEnd - k + 1);
+    context = fullSeq(histStart:histEnd);
+    if numel(context) < k
+        context = [zeros(1, k - numel(context)), context];
     end
 
-    % Normalize and compute loss
-    accumProb = accumProb / sum(accumProb);
-    prob = max(accumProb(sym), realmin);
+    probVec = forecastFromTrieMixture(context, trieChildren, trieCounts, ...
+        priorProb, k, weightBase, priorScale, gamma, mixAlpha, shallowK);
+    prob = max(probVec(sym), realmin);
     totalBits = totalBits - log2(prob);
 
-    % Update context for next symbol
-    if i >= k
-        context = valSeq(i-k+1:i);
-    else
-        context = [zeros(1, k-i), valSeq(1:i)];
-    end
+    % Update context for next symbol by learning from the observed validation symbol.
+    priorCounts(sym) = priorCounts(sym) + 1;
+    priorProb = priorCounts / sum(priorCounts);
+    [trieChildren, trieCounts, nodeCount] = updateTrieWithObservation( ...
+        trieChildren, trieCounts, nodeCount, context, sym, k);
 end
 
 bitsCV = totalBits / valLen;
 
+end
+
+function probVec = forecastFromTrieMixture(context, trieChildren, trieCounts, ...
+    priorProb, k, weightBase, priorScale, gamma, mixAlpha, shallowK)
+deepProb = forecastFromTrie(context, trieChildren, trieCounts, priorProb, k, weightBase, priorScale, gamma);
+if isempty(mixAlpha) || mixAlpha <= 0 || isempty(shallowK) || shallowK >= k
+    probVec = deepProb;
+    return;
+end
+
+shallowProb = forecastFromTrie(context, trieChildren, trieCounts, priorProb, shallowK, weightBase, priorScale, gamma);
+probVec = mixAlpha * shallowProb + (1 - mixAlpha) * deepProb;
+probVec = probVec / sum(probVec);
+probVec = probVec(:)';
+end
+
+function probVec = forecastFromTrie(context, trieChildren, trieCounts, ...
+    priorProb, k, weightBase, priorScale, gamma)
+accumProb = priorProb * priorScale;
+node = uint32(1);
+for d = 1:k
+    sym = context(end - d + 1);
+    childNode = trieChildren(node, sym);
+    if childNode == 0
+        break;
+    end
+
+    node = childNode;
+    depthCounts = trieCounts(node, :);
+    total = sum(depthCounts);
+    if total > 0
+        lambda = total / (total + gamma);
+        depthProb = lambda * (depthCounts / total) + (1 - lambda) * priorProb;
+    else
+        depthProb = priorProb;
+    end
+
+    accumProb = accumProb + (weightBase^d) * depthProb;
+end
+
+probVec = accumProb / sum(accumProb);
+probVec = probVec(:)';
 end
 
 function [trieChildren, trieCounts] = growTrieStorage(trieChildren, trieCounts, requiredNodeCount)
@@ -146,4 +157,34 @@ currentSize = size(trieChildren, 1);
 targetSize = max(currentSize * 2, double(requiredNodeCount) + 1024);
 trieChildren(targetSize, 9) = uint32(0);
 trieCounts(targetSize, 9) = 0;
+end
+
+function mixAlpha = defaultMixAlpha(k)
+if k >= 4
+    mixAlpha = 0.25;
+else
+    mixAlpha = 0.0;
+end
+end
+
+function shallowK = defaultShallowK(k)
+shallowK = min(2, max(1, k - 1));
+end
+
+function [trieChildren, trieCounts, nodeCount] = updateTrieWithObservation( ...
+    trieChildren, trieCounts, nodeCount, context, nextSym, k)
+
+node = uint32(1);
+for d = 1:k
+    sym = context(end - d + 1);
+    if trieChildren(node, sym) == 0
+        nodeCount = nodeCount + 1;
+        if double(nodeCount) > size(trieChildren, 1)
+            [trieChildren, trieCounts] = growTrieStorage(trieChildren, trieCounts, nodeCount);
+        end
+        trieChildren(node, sym) = nodeCount;
+    end
+    node = trieChildren(node, sym);
+    trieCounts(node, nextSym) = trieCounts(node, nextSym) + 1;
+end
 end

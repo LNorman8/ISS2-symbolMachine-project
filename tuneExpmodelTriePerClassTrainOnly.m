@@ -5,7 +5,8 @@
 % Ensures all datasets beat their respective benchmarks.
 
 % Load dataset classification
-load('perClassParams.mat', 'datasets', 'benchmarks', 'datasetClass', 'classNames', 'classMembers');
+load('perClassParams.mat', 'datasets', 'benchmarks', 'entropies', 'datasetClass', ...
+    'classNames', 'classThresholds', 'classMembers');
 
 % Define per-class hyperparameter grids
 classGrids = {};
@@ -139,6 +140,8 @@ for classIdx = 1:4
         'weightBase', bestParams.weightBase, ...
         'priorScale', bestParams.priorScale, ...
         'gamma', bestParams.gamma, ...
+        'mixAlpha', defaultMixAlpha(bestParams.k), ...
+        'shallowK', defaultShallowK(bestParams.k), ...
         'avgBitsCV', mean(bitsPerDatasetCV), ...
         'avgBitsTest', mean(bestBitsForClass), ...
         'bitsPerDataset', bestBitsForClass);
@@ -147,8 +150,8 @@ for classIdx = 1:4
 end
 
 % Save per-class parameters
-save('perClassParams.mat', 'datasets', 'benchmarks', 'datasetClass', 'classNames', ...
-    'classMembers', 'bestParamsPerClass', 'resultsPerClass');
+save('perClassParams.mat', 'datasets', 'benchmarks', 'entropies', 'datasetClass', 'classNames', ...
+    'classThresholds', 'classMembers', 'bestParamsPerClass', 'resultsPerClass');
 
 fprintf('\n========== SUMMARY ==========\n');
 fprintf('Per-class parameters saved to perClassParams.mat\n');
@@ -181,4 +184,16 @@ if allBeatBenchmark
     fprintf('\nSUCCESS: All datasets beat their benchmarks!\n');
 else
     fprintf('\nWARNING: Some datasets did not beat benchmarks. Per-dataset fine-tuning may be needed.\n');
+end
+
+function mixAlpha = defaultMixAlpha(k)
+if k >= 4
+    mixAlpha = 0.25;
+else
+    mixAlpha = 0.0;
+end
+end
+
+function shallowK = defaultShallowK(k)
+shallowK = min(2, max(1, k - 1));
 end

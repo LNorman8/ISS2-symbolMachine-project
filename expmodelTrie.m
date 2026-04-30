@@ -1,32 +1,44 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % VARIABLE-CONTEXT MODEL WITH TRIE LOOKUP AND EXPONENTIAL DEPTH WEIGHTING
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-function bitsPerSymbol = expmodelTrie(name, varargin)
-arguments
-    name (1,:) char
-end
-arguments (Repeating)
-    varargin (1,:) char
-end
+function [bitsPerSymbol, selectedParams] = expmodelTrie(name, varargin)
 if nargin < 1 || isempty(name)
     name = 'Hawaiian';
 end
+if isstring(name)
+    name = char(name);
+end
+if ~ischar(name)
+    error('Dataset name must be a character vector or string scalar.');
+end
+
 opts.k = [];
 opts.weightBase = [];
 opts.priorScale = [];
 opts.gamma = [];
+opts.mixAlpha = [];
+opts.shallowK = [];
 opts.autoTune = true;
-opts.usePerClassTuning = true;  % Use entropy-based per-class params if available
+opts.useDatasetTuning = true;
+opts.usePerClassTuning = true;
+opts.useGlobalDefault = true;
+opts.datasetParamsFile = 'datasetParams.mat';
+opts.globalDefaultFile = 'globalDefaultParams.mat';
+opts.trainFileOverride = '';
+opts.testFileOverride = '';
 if mod(numel(varargin),2) ~= 0
     error('expmodelTrie requires name/value parameter pairs.');
 end
 for vi = 1:2:numel(varargin)
     nameArg = varargin{vi};
     valArg = varargin{vi+1};
-    if ~ischar(nameArg) && ~isStringScalar(nameArg)
+    if isstring(nameArg)
+        nameArg = char(nameArg);
+    end
+    if ~ischar(nameArg)
         error('Parameter names must be character vectors or string scalars.');
     end
-    switch lower(char(nameArg))
+    switch lower(nameArg)
         case 'k'
             opts.k = valArg;
         case 'weightbase'
@@ -35,10 +47,26 @@ for vi = 1:2:numel(varargin)
             opts.priorScale = valArg;
         case 'gamma'
             opts.gamma = valArg;
+        case 'mixalpha'
+            opts.mixAlpha = valArg;
+        case 'shallowk'
+            opts.shallowK = valArg;
         case 'autotune'
-            opts.autoTune = valArg;
+            opts.autoTune = toLogical(valArg);
+        case 'usedatasettuning'
+            opts.useDatasetTuning = toLogical(valArg);
         case 'useperclasstuning'
-            opts.usePerClassTuning = valArg;
+            opts.usePerClassTuning = toLogical(valArg);
+        case 'useglobaldefault'
+            opts.useGlobalDefault = toLogical(valArg);
+        case 'datasetparamsfile'
+            opts.datasetParamsFile = char(valArg);
+        case 'globaldefaultfile'
+            opts.globalDefaultFile = char(valArg);
+        case 'trainfileoverride'
+            opts.trainFileOverride = char(valArg);
+        case 'testfileoverride'
+            opts.testFileOverride = char(valArg);
         otherwise
             error('Unknown parameter name: %s', nameArg);
     end
@@ -46,6 +74,12 @@ end
 
 trainFile = ['sequence_' name '_train.mat'];
 testFile  = ['sequence_' name '_test.mat'];
+if ~isempty(opts.trainFileOverride)
+    trainFile = opts.trainFileOverride;
+end
+if ~isempty(opts.testFileOverride)
+    testFile = opts.testFileOverride;
+end
 seq_struct = load(trainFile);
 sequence = seq_struct.sequence; % Extract the sequence from the loaded data
 trainSeq = sequence(:)'; % Ensure row vector
@@ -60,68 +94,17 @@ weightBaseCands = [1.8, 2.2, 2.6, 3.0];
 priorScaleCands = [0.2, 0.5, 1.0];
 gammaCands = [4.0, 8.0, 16.0];
 
-% Try to load per-class parameters if per-class tuning is enabled
-perClassParamsAvailable = false;
-classIdx = [];
-if opts.usePerClassTuning && isempty(opts.k)  % Only use per-class if not manually overriding
-    if isfile('perClassParams.mat')
-        try
-            data = load('perClassParams.mat');
-            if isfield(data, 'bestParamsPerClass') && isfield(data, 'classThresholds') && ...
-                    isfield(data, 'datasets') && isfield(data, 'classMembers')
-                % Compute entropy for this dataset
-                entropy = computeEntropy(trainSeq);
+% Try to resolve parameters in precedence order:
+% manual overrides -> dataset-specific -> per-class -> global default -> autoTune -> fallback defaults.
+[k, weightBase, priorScale, gamma, mixAlpha, shallowK, paramSource] = resolveRuntimeParams( ...
+    name, trainSeq, opts, maxK, weightBaseCands, priorScaleCands, gammaCands);
+fprintf('Using %s\n', paramSource);
 
-                % Classify into entropy regime
-                classThresholds = data.classThresholds;
-                for c = 1:4
-                    if entropy >= classThresholds(c) && entropy < classThresholds(c+1)
-                        classIdx = c;
-                        break;
-                    end
-                end
-
-                if ~isempty(classIdx) && ~isempty(data.bestParamsPerClass{classIdx})
-                    perClassParamsAvailable = true;
-                    params = data.bestParamsPerClass{classIdx};
-                    fprintf('Using per-class tuning: %s (entropy=%.4f)\n', ...
-                        data.classNames{classIdx}, entropy);
-                end
-            end
-        catch
-            % If loading fails, fall back to autoTune
-        end
-    end
+if isempty(mixAlpha)
+    mixAlpha = defaultMixAlpha(k);
 end
-
-if perClassParamsAvailable
-    % Use per-class parameters
-    k = params.k;
-    weightBase = params.weightBase;
-    priorScale = params.priorScale;
-    gamma = params.gamma;
-elseif opts.autoTune
-    % Select context depth and smoothing parameters with an inner validation
-    % pass on training data.
-    [k, weightBase, priorScale, gamma] = chooseAdaptiveParams(trainSeq, ...
-        maxK, weightBaseCands, priorScaleCands, gammaCands);
-else
-    k = opts.k;
-    if isempty(k)
-        k = 8;
-    end
-    weightBase = opts.weightBase;
-    if isempty(weightBase)
-        weightBase = 3.0;
-    end
-    priorScale = opts.priorScale;
-    if isempty(priorScale)
-        priorScale = 0.5;
-    end
-    gamma = opts.gamma;
-    if isempty(gamma)
-        gamma = 8.0;
-    end
+if isempty(shallowK)
+    shallowK = defaultShallowK(k);
 end
 % ============================================================
 % 1. Precompute global prior (marginal distribution)
@@ -158,9 +141,11 @@ end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % --- TEST SET SETUP (Symbol Machine) ---
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% Bootstrap the initial context from the end of the training sequence so
+% Bootstrap the initial context from the start of the training sequence so
 % that the first test predictions already have a full k-symbol context.
-context = trainSeq(end-k+1:end);
+% (Now the start of the sequence instead of the end, spec. for lexical data
+% where that should hopefully help a bit more)
+context = trainSeq(1:k+1);
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % --- VARIABLE-LENGTH FORECAST LOOP ---
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -168,8 +153,8 @@ context = trainSeq(end-k+1:end);
 % each observed symbol is fed back into the trie so the model keeps
 % learning online.
 for t = 1:T
-    probVec = forecastFromTrie(context, trieChildren, trieCounts, ...
-        priorProb, k, weightBase, priorScale, gamma);
+    probVec = forecastFromTrieMixture(context, trieChildren, trieCounts, ...
+        priorProb, k, weightBase, priorScale, gamma, mixAlpha, shallowK);
     % ============================================================
     % Symbol Machine step (penalty is accumulated internally in SYMBOLDATA)
     % ============================================================
@@ -189,6 +174,178 @@ end
 reportSymbolMachineS26;
 global SYMBOLDATA
 bitsPerSymbol = SYMBOLDATA.totalPenaltyInBits / T;
+selectedParams = struct( ...
+    'k', k, ...
+    'weightBase', weightBase, ...
+    'priorScale', priorScale, ...
+    'gamma', gamma, ...
+    'mixAlpha', mixAlpha, ...
+    'shallowK', shallowK, ...
+    'source', paramSource);
+end
+
+function [k, weightBase, priorScale, gamma, mixAlpha, shallowK, source] = resolveRuntimeParams( ...
+    name, trainSeq, opts, maxK, weightBaseCands, priorScaleCands, gammaCands)
+k = [];
+weightBase = [];
+priorScale = [];
+gamma = [];
+mixAlpha = [];
+shallowK = [];
+source = 'fallback defaults';
+
+manualOverride = ~isempty(opts.k) || ~isempty(opts.weightBase) || ~isempty(opts.priorScale) || ...
+    ~isempty(opts.gamma) || ~isempty(opts.mixAlpha) || ~isempty(opts.shallowK);
+if manualOverride
+    k = opts.k;
+    if isempty(k)
+        k = 8;
+    end
+    weightBase = opts.weightBase;
+    if isempty(weightBase)
+        weightBase = 3.0;
+    end
+    priorScale = opts.priorScale;
+    if isempty(priorScale)
+        priorScale = 0.5;
+    end
+    gamma = opts.gamma;
+    if isempty(gamma)
+        gamma = 8.0;
+    end
+    mixAlpha = opts.mixAlpha;
+    shallowK = opts.shallowK;
+    source = 'manual overrides';
+    return;
+end
+
+if opts.useDatasetTuning && isfile(opts.datasetParamsFile)
+    try
+        data = load(opts.datasetParamsFile);
+        if isfield(data, 'datasetParams')
+            matchIdx = find(strcmp({data.datasetParams.name}, name), 1);
+            if ~isempty(matchIdx)
+                params = data.datasetParams(matchIdx).params;
+                [k, weightBase, priorScale, gamma, mixAlpha, shallowK] = normalizeParams(params, maxK);
+                source = sprintf('dataset-specific tuning for %s', name);
+                return;
+            end
+        end
+    catch
+        % Fall through to class/global/default resolution.
+    end
+end
+
+if opts.usePerClassTuning && isfile('perClassParams.mat')
+    try
+        data = load('perClassParams.mat');
+        if isfield(data, 'bestParamsPerClass') && isfield(data, 'classThresholds') && ...
+                isfield(data, 'classNames') && isfield(data, 'classMembers')
+            entropy = computeEntropy(trainSeq);
+            classIdx = [];
+            classThresholds = data.classThresholds;
+            for c = 1:4
+                if entropy >= classThresholds(c) && entropy < classThresholds(c+1)
+                    classIdx = c;
+                    break;
+                end
+            end
+            if ~isempty(classIdx) && classIdx <= numel(data.bestParamsPerClass) && ...
+                    ~isempty(data.bestParamsPerClass{classIdx})
+                params = data.bestParamsPerClass{classIdx};
+                [k, weightBase, priorScale, gamma, mixAlpha, shallowK] = normalizeParams(params, maxK);
+                source = sprintf('per-class tuning (%s)', data.classNames{classIdx});
+                return;
+            end
+        end
+    catch
+        % Fall through.
+    end
+end
+
+if opts.useGlobalDefault && isfile(opts.globalDefaultFile)
+    try
+        data = load(opts.globalDefaultFile);
+        if isfield(data, 'globalDefaultParams')
+            [k, weightBase, priorScale, gamma, mixAlpha, shallowK] = normalizeParams(data.globalDefaultParams, maxK);
+            source = 'global default params';
+            return;
+        end
+    catch
+        % Fall through.
+    end
+end
+
+if opts.autoTune
+    [k, weightBase, priorScale, gamma] = chooseAdaptiveParams(trainSeq, ...
+        maxK, weightBaseCands, priorScaleCands, gammaCands);
+    mixAlpha = defaultMixAlpha(k);
+    shallowK = defaultShallowK(k);
+    source = 'autoTune training CV';
+else
+    k = 8;
+    weightBase = 3.0;
+    priorScale = 0.5;
+    gamma = 8.0;
+    mixAlpha = defaultMixAlpha(k);
+    shallowK = defaultShallowK(k);
+    source = 'fallback defaults';
+end
+end
+
+function [k, weightBase, priorScale, gamma, mixAlpha, shallowK] = normalizeParams(params, maxK)
+k = params.k;
+if isempty(k)
+    k = min(8, maxK);
+end
+weightBase = params.weightBase;
+if isempty(weightBase)
+    weightBase = 3.0;
+end
+priorScale = params.priorScale;
+if isempty(priorScale)
+    priorScale = 0.5;
+end
+gamma = params.gamma;
+if isempty(gamma)
+    gamma = 8.0;
+end
+if isfield(params, 'mixAlpha') && ~isempty(params.mixAlpha)
+    mixAlpha = params.mixAlpha;
+else
+    mixAlpha = defaultMixAlpha(k);
+end
+if isfield(params, 'shallowK') && ~isempty(params.shallowK)
+    shallowK = params.shallowK;
+else
+    shallowK = defaultShallowK(k);
+end
+end
+
+function mixAlpha = defaultMixAlpha(k)
+if k >= 4
+    mixAlpha = 0.25;
+else
+    mixAlpha = 0.0;
+end
+end
+
+function shallowK = defaultShallowK(k)
+shallowK = min(2, max(1, k - 1));
+end
+
+function tf = toLogical(value)
+if islogical(value)
+    tf = value;
+elseif isnumeric(value)
+    tf = value ~= 0;
+elseif isstring(value)
+    tf = any(strcmpi(string(value), ["true","1","yes","on"]));
+elseif ischar(value)
+    tf = any(strcmpi(string(value), ["true","1","yes","on"]));
+else
+    error('Expected a logical-compatible value.');
+end
 end
 
 function [kBest, weightBaseBest, priorScaleBest, gammaBest] = ...
@@ -278,6 +435,20 @@ for kCand = 1:maxK
         end
     end
 end
+end
+
+function probVec = forecastFromTrieMixture(context, trieChildren, trieCounts, ...
+    priorProb, k, weightBase, priorScale, gamma, mixAlpha, shallowK)
+deepProb = forecastFromTrie(context, trieChildren, trieCounts, priorProb, k, weightBase, priorScale, gamma);
+if isempty(mixAlpha) || mixAlpha <= 0 || isempty(shallowK) || shallowK >= k
+    probVec = deepProb;
+    return;
+end
+
+shallowProb = forecastFromTrie(context, trieChildren, trieCounts, priorProb, shallowK, weightBase, priorScale, gamma);
+probVec = mixAlpha * shallowProb + (1 - mixAlpha) * deepProb;
+probVec = probVec / sum(probVec);
+probVec = probVec(:)';
 end
 
 function probVec = forecastFromTrie(context, trieChildren, trieCounts, ...
