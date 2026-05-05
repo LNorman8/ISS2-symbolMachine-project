@@ -1,0 +1,1 @@
+matlab -batch "expmodelTrie('Dickens', 6,2,0.1,0)"
