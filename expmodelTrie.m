@@ -69,25 +69,25 @@ elseif ~AUTOTUNE % Use preset values based on prior tuning runs (+ manual adjust
             weightBase = 1.015;
             priorScale = 0.240;
             gamma = 0.00;
-        case 'Dickens'
+        case 'Dickens' % 1.6334
             k = 9;
             weightBase = 2.00;
             priorScale = 0.10;
             gamma = 2.00;
-        case 'DIAtemp'
+        case 'DIAtemp' % 1.6539
             k = 4;
             weightBase = 0.75; % Tuning decided that the wind is unpredictable
             priorScale = 0.01;
             gamma = 0.90;
-        case 'DIAwind'
+        case 'DIAwind' % 1.8762
             k = 10;
             weightBase = 0.28;
             priorScale = 0.045;
             gamma = 7.375;
         case 'ElecDemand'
             k = 12;
-            weightBase = 1.00;
-            priorScale = 0.10;
+            weightBase = 0.96;
+            priorScale = 0.06;
             gamma = 0.00;
         case 'HoustonRain'
             k = 10;

@@ -71,20 +71,20 @@ Chosen params for DIAwind [TUNED]: k=10, weightBase=0.280, priorScale=0.045, gam
 Initialized Symbol Machine for sequence_ElecDemand_test.mat, which contains 500 symbols.
 Use symbolMachineS26.m to make forecasts.
 
-Chosen params for ElecDemand [TUNED]: k=12, weightBase=0.960, priorScale=0.080, gamma=0.000
+Chosen params for ElecDemand [USER-PROVIDED]: k=12, weightBase=0.960, priorScale=0.060, gamma=0.000
 
-|--BEGIN SYMBOL MACHINE S26 REPORT
+|--BEGIN SYMBOL MACHINE S26 REPORT 
 | Processed 500 out of 500 symbols in sequence_ElecDemand_test.mat.
-| Total penalty: 639.014 bits (1.2780 bits per symbol).
-|     2390 probabilities forecasted between 0.0000 (Inf bits) and 0.0039 (8 bits); actual occurrence rate 0.0017.
-|      301 probabilities forecasted between 0.0039 (8 bits) and 0.0078 (7 bits); actual occurrence rate 0.0033.
-|      179 probabilities forecasted between 0.0078 (7 bits) and 0.0156 (6 bits); actual occurrence rate 0.0112.
-|      146 probabilities forecasted between 0.0156 (6 bits) and 0.0312 (5 bits); actual occurrence rate 0.0274.
-|      219 probabilities forecasted between 0.0312 (5 bits) and 0.0625 (4 bits); actual occurrence rate 0.0274.
-|      293 probabilities forecasted between 0.0625 (4 bits) and 0.1250 (3 bits); actual occurrence rate 0.0751.
-|      234 probabilities forecasted between 0.1250 (3 bits) and 0.2500 (2 bits); actual occurrence rate 0.2350.
-|      320 probabilities forecasted between 0.2500 (2 bits) and 0.5000 (1 bits); actual occurrence rate 0.3875.
-|      418 probabilities forecasted between 0.5000 (1 bits) and 1.0000 (0 bits); actual occurrence rate 0.6746.
+| Total penalty: 638.937 bits (1.2779 bits per symbol).
+|     2468 probabilities forecasted between 0.0000 (Inf bits) and 0.0039 (8 bits); actual occurrence rate 0.0016.
+|      252 probabilities forecasted between 0.0039 (8 bits) and 0.0078 (7 bits); actual occurrence rate 0.0079.
+|      157 probabilities forecasted between 0.0078 (7 bits) and 0.0156 (6 bits); actual occurrence rate 0.0064.
+|      138 probabilities forecasted between 0.0156 (6 bits) and 0.0312 (5 bits); actual occurrence rate 0.0290.
+|      221 probabilities forecasted between 0.0312 (5 bits) and 0.0625 (4 bits); actual occurrence rate 0.0271.
+|      292 probabilities forecasted between 0.0625 (4 bits) and 0.1250 (3 bits); actual occurrence rate 0.0753.
+|      233 probabilities forecasted between 0.1250 (3 bits) and 0.2500 (2 bits); actual occurrence rate 0.2361.
+|      320 probabilities forecasted between 0.2500 (2 bits) and 0.5000 (1 bits); actual occurrence rate 0.3844.
+|      419 probabilities forecasted between 0.5000 (1 bits) and 1.0000 (0 bits); actual occurrence rate 0.6754.
 |--END SYMBOL MACHINE S26 REPORT
 
 Initialized Symbol Machine for sequence_HoustonRain_test.mat, which contains 61629 symbols.
